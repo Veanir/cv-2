@@ -13,6 +13,7 @@ import wandb
 import pandas as pd
 from typing import Dict, Tuple
 from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
 
 # Wczytaj zmienne środowiskowe z pliku .env
 load_dotenv()
@@ -353,19 +354,40 @@ def run_single_experiment(model_type: str,
             wandb.finish()
             print("🧹 Run WandB zakończony.")
 
-def limit_dataloader(dataloader, fraction):
-    """Ogranicza rozmiar DataLoader'a"""
+def limit_dataloader(dataloader: DataLoader, fraction: float) -> DataLoader:
+    """Ogranicza rozmiar DataLoader'a, zachowując dystrybucję klas (stratyfikacja)."""
     dataset = dataloader.dataset
-    total_size = len(dataset)
-    limited_size = int(total_size * fraction)
-    
-    indices = list(range(total_size))[:limited_size]
-    limited_dataset = torch.utils.data.Subset(dataset, indices)
+
+    # Sprawdzamy, czy `dataset` to nasz HAM10000Dataset. Jeśli nie, stosujemy losowe próbkowanie.
+    if not hasattr(dataset, 'data') or 'dx' not in dataset.data.columns:
+        print("⚠️ Ostrzeżenie: Dataset nie jest typu HAM10000Dataset. Stosuję losowe próbkowanie zamiast stratyfikacji.")
+        total_size = len(dataset)
+        limited_size = int(total_size * fraction)
+        
+        indices = list(range(total_size))
+        random.shuffle(indices)
+        limited_indices = indices[:limited_size]
+    else:
+        # Stratyfikacja na podstawie etykiet (kolumna 'dx')
+        labels = dataset.data['dx']
+        indices = list(range(len(dataset)))
+
+        # Używamy train_test_split do uzyskania stratyfikowanego podzbioru indeksów.
+        # Ignorujemy drugi zwracany element (reszta danych).
+        limited_indices, _ = train_test_split(
+            indices,
+            train_size=fraction,
+            stratify=labels,
+            random_state=42  # Dla reprodukowalności
+        )
+        print(f"   -> Utworzono stratyfikowany podzbiór {len(limited_indices)} próbek.")
+
+    limited_dataset = torch.utils.data.Subset(dataset, limited_indices)
     
     return torch.utils.data.DataLoader(
         limited_dataset,
         batch_size=dataloader.batch_size,
-        shuffle=True, # Shuffle dla ograniczonego zbioru
+        shuffle=True,  # Zawsze tasuj mniejszy zbiór
         num_workers=dataloader.num_workers,
         pin_memory=dataloader.pin_memory
     )

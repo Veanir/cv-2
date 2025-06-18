@@ -24,7 +24,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 4
               capabilities: [gpu]
     command: python test_setup.py
     
@@ -35,6 +35,13 @@ services:
     shm_size: '2gb'
     volumes:
       - ./data:/app/data
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./.env:/app/.env
+    environment:
+      - PYTHONPATH=/app
+      - KAGGLE_USERNAME=${KAGGLE_USERNAME}
+      - KAGGLE_KEY=${KAGGLE_KEY}
     command: python scripts/prepare_dataset.py
 
   # Serwis do uruchamiania testów
@@ -58,7 +65,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 4
               capabilities: [gpu]
     
   # Serwis do uruchamiania pojedynczych eksperymentów
@@ -83,7 +90,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 4
               capabilities: [gpu]
     # Domyślnie uruchamia mały eksperyment testowy
     command: python main.py --mode single --model_type cnn --model_name resnet18 --fraction 0.1
@@ -111,7 +118,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 4
               capabilities: [gpu]
     command: python main.py --mode comparison
 

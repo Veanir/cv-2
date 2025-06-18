@@ -6,10 +6,16 @@ treningowy, walidacyjny i testowy, co zapewnia spójność
 i przyspiesza ładowanie danych w głównym skrypcie.
 """
 import os
+import sys
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedShuffleSplit
 from tqdm import tqdm
+
+# Dodaj ścieżkę do src
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+from data.dataset_downloader import download_ham10000
 
 def find_image_paths(data_dir: str, metadata: pd.DataFrame) -> pd.DataFrame:
     """Znajduje i mapuje ścieżki do obrazów dla każdego image_id."""
@@ -45,14 +51,27 @@ def create_splits(data_dir: str = 'data',
                   random_state: int = 42):
     """
     Tworzy stratyfikowany podział danych i zapisuje go do pliku CSV.
+    Automatycznie pobiera dataset jeśli nie istnieje.
     """
     metadata_path = os.path.join(data_dir, 'HAM10000_metadata.csv')
     output_path = os.path.join(data_dir, 'ham10000_splits.csv')
     
+    # Sprawdź czy dane już istnieją
     if not os.path.exists(metadata_path):
         print(f"❌ Nie znaleziono pliku metadanych: {metadata_path}")
-        print("   Upewnij się, że dataset HAM10000 został pobrany i umieszczony w folderze 'data'.")
-        return
+        print("📥 Próbuję automatycznie pobrać dataset HAM10000...")
+        
+        try:
+            success = download_ham10000(data_dir)
+            if not success:
+                print("❌ Nie udało się pobrać datasetu!")
+                print("   Sprawdź konfigurację Kaggle API w pliku .env")
+                return
+            print("✅ Dataset został pobrany pomyślnie!")
+        except Exception as e:
+            print(f"❌ Błąd podczas pobierania datasetu: {e}")
+            print("   Sprawdź konfigurację Kaggle API w pliku .env")
+            return
 
     print("📖 Wczytywanie metadanych...")
     metadata = pd.read_csv(metadata_path)

@@ -68,7 +68,7 @@ class GradCAM:
         try:
             self.model.eval()
             
-            output = self.model(x.unsqueeze(0))
+            output = self.model(x)
             
             if class_idx is None:
                 class_idx = output.argmax(dim=1).item()
