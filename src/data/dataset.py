@@ -29,105 +29,52 @@ class HAM10000Dataset(Dataset):
     def __init__(self, 
                  data_dir: str,
                  split: str = 'train',
-                 transform: Optional[transforms.Compose] = None,
-                 download: bool = True):
+                 transform: Optional[transforms.Compose] = None):
         """
         Args:
             data_dir: Ścieżka do folderu z danymi
             split: 'train', 'val' lub 'test'
             transform: Transformacje obrazów
-            download: Czy pobrać dane jeśli nie istnieją
         """
         self.data_dir = data_dir
         self.split = split
         self.transform = transform
         
-        if download:
-            self._download_data()
-            
-        # Załaduj metadane
-        self.metadata = self._load_metadata()
+        # Załaduj przygotowane splity
+        self.metadata = self._load_prepared_splits()
         
         # Filtruj dane dla odpowiedniego split'a
-        self.data = self._prepare_split()
+        self.data = self.metadata[self.metadata['split'] == self.split].reset_index(drop=True)
         
+        if len(self.data) == 0:
+            raise RuntimeError(f"Nie znaleziono danych dla splitu '{self.split}'. "
+                               "Uruchom `python scripts/prepare_dataset.py`.")
+
         # Mapuj etykiety na indeksy
         self.class_to_idx = {cls: idx for idx, cls in enumerate(self.CLASS_NAMES)}
         
-    def _download_data(self):
-        """Pobiera i przygotowuje dane HAM10000"""
-        from .dataset_downloader import download_ham10000
-        
-        print("🚀 Sprawdzam i konfiguruję dane HAM10000...")
-        
-        # Użyj nowego downloadera
-        success = download_ham10000(
-            data_dir=self.data_dir,
-            force_sample=False,  # Najpierw spróbuj prawdziwych danych
-            num_samples=500      # Większy rozmiar dla lepszych podziałów
-        )
-        
-        if not success:
-            print("❌ Nie udało się skonfigurować danych!")
-            raise RuntimeError("Konfiguracja danych nieudana")
-        
-
-        
-    def _load_metadata(self) -> pd.DataFrame:
-        """Ładuje metadane datasetu"""
-        metadata_path = os.path.join(self.data_dir, "HAM10000_metadata.csv")
-        return pd.read_csv(metadata_path)
-        
-    def _prepare_split(self) -> pd.DataFrame:
-        """Przygotowuje podział danych na train/val/test"""
-        # Stratified split zachowujący proporcje klas
-        np.random.seed(42)
-        
-        grouped = self.metadata.groupby('dx')
-        train_data = []
-        val_data = []
-        test_data = []
-        
-        for class_name, group in grouped:
-            n_samples = len(group)
-            indices = np.random.permutation(n_samples)
-            
-            train_end = int(0.7 * n_samples)
-            val_end = int(0.85 * n_samples)
-            
-            if self.split == 'train':
-                train_data.append(group.iloc[indices[:train_end]])
-            elif self.split == 'val':
-                val_data.append(group.iloc[indices[train_end:val_end]])
-            elif self.split == 'test':
-                test_data.append(group.iloc[indices[val_end:]])
-                
-        if self.split == 'train':
-            return pd.concat(train_data, ignore_index=True)
-        elif self.split == 'val':
-            return pd.concat(val_data, ignore_index=True)
-        else:
-            return pd.concat(test_data, ignore_index=True)
+    def _load_prepared_splits(self) -> pd.DataFrame:
+        """Ładuje wstępnie przygotowany plik z podziałami danych."""
+        splits_path = os.path.join(self.data_dir, "ham10000_splits.csv")
+        if not os.path.exists(splits_path):
+            raise FileNotFoundError(
+                f"Plik podziału '{splits_path}' nie został znaleziony.\n"
+                "Proszę najpierw uruchomić skrypt: python scripts/prepare_dataset.py"
+            )
+        return pd.read_csv(splits_path)
     
     def __len__(self) -> int:
         return len(self.data)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
-        """Zwraca obraz i etykietę"""
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, str]:
+        """Zwraca obraz, etykietę oraz ID obrazu."""
         row = self.data.iloc[idx]
-        image_id = row['image_id']
         label = row['dx']
-        
-        # Znajdź ścieżkę do obrazu
-        image_path = None
-        for part in ['HAM10000_images_part_1', 'HAM10000_images_part_2']:
-            potential_path = os.path.join(self.data_dir, part, f"{image_id}.jpg")
-            if os.path.exists(potential_path):
-                image_path = potential_path
-                break
-                
-        if image_path is None:
-            raise FileNotFoundError(f"Nie znaleziono obrazu: {image_id}")
+        image_path = os.path.join(self.data_dir, row['path'])
+        image_id = row['image_id']
+            
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Nie znaleziono obrazu: {image_path}")
             
         # Załaduj obraz
         image = Image.open(image_path).convert('RGB')
@@ -138,23 +85,8 @@ class HAM10000Dataset(Dataset):
         # Konwertuj etykietę na indeks
         label_idx = self.class_to_idx[label]
         
-        return image, label_idx
+        return image, label_idx, image_id
     
-    def get_class_weights(self) -> torch.Tensor:
-        """Oblicza wagi klas dla niezbalansowanego datasetu"""
-        class_counts = self.data['dx'].value_counts()
-        total_samples = len(self.data)
-        
-        weights = []
-        for class_name in self.CLASS_NAMES:
-            if class_name in class_counts:
-                weight = total_samples / (len(self.CLASS_NAMES) * class_counts[class_name])
-            else:
-                weight = 1.0
-            weights.append(weight)
-            
-        return torch.FloatTensor(weights)
-
 
 def get_transforms(split: str = 'train', img_size: int = 224) -> transforms.Compose:
     """Zwraca transformacje obrazów dla danego split'a"""
@@ -180,9 +112,28 @@ def get_transforms(split: str = 'train', img_size: int = 224) -> transforms.Comp
 def create_dataloaders(data_dir: str, 
                       batch_size: int = 32, 
                       img_size: int = 224,
-                      num_workers: int = 4) -> Tuple[DataLoader, DataLoader, DataLoader]:
+                      num_workers: int = 4,
+                      download_if_needed: bool = True) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """Tworzy DataLoader'y dla train, val i test"""
     
+    # Sprawdź czy dane są gotowe (pobrane i przygotowane)
+    splits_file = os.path.join(data_dir, 'ham10000_splits.csv')
+    if not os.path.exists(splits_file):
+        print("⚠️ Plik podziału danych nie istnieje.")
+        if download_if_needed:
+            print("   Próbuję automatycznie pobrać i przygotować dane...")
+            from .dataset_downloader import download_ham10000
+            from scripts.prepare_dataset import create_splits
+            
+            # Krok 1: Pobieranie
+            if download_ham10000(data_dir):
+                # Krok 2: Przygotowanie
+                create_splits(data_dir)
+            else:
+                raise RuntimeError("Automatyczne pobieranie i przygotowanie danych nie powiodło się.")
+        else:
+            raise FileNotFoundError(f"Brak pliku {splits_file}. Uruchom `scripts/prepare_dataset.py`.")
+
     # Utwórz datasety
     train_dataset = HAM10000Dataset(
         data_dir=data_dir,
@@ -234,14 +185,16 @@ if __name__ == "__main__":
     # Test datasetu
     print("Testowanie datasetu HAM10000...")
     
-    train_loader, val_loader, test_loader = create_dataloaders("data", batch_size=4)
+    # Uruchomienie testowe wymaga automatycznego przygotowania
+    train_loader, val_loader, test_loader = create_dataloaders("data", batch_size=4, download_if_needed=True)
     
     print(f"Train samples: {len(train_loader.dataset)}")
     print(f"Val samples: {len(val_loader.dataset)}")
     print(f"Test samples: {len(test_loader.dataset)}")
     
     # Test jednej paczki
-    for images, labels in train_loader:
+    for images, labels, image_ids in train_loader:
         print(f"Batch shape: {images.shape}")
         print(f"Labels: {labels}")
+        print(f"Image IDs: {image_ids}")
         break 

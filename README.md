@@ -68,9 +68,29 @@ project_2/
 
 ## 🔧 Konfiguracja
 
-Główne ustawienia w `config.py`:
+### Kaggle API (wymagane dla datasetu)
 
-- **Dataset**: HAM10000 (7 klas dermatologicznych)
+1. **Utwórz konto na** https://www.kaggle.com
+2. **Uzyskaj klucze API**: Account → API → Create New API Token
+3. **Utwórz plik `.env`** w głównym katalogu projektu:
+
+```bash
+# .env
+KAGGLE_USERNAME=twoj_username
+KAGGLE_KEY=twój_klucz_api_z_kaggle.json
+```
+
+**Przykład:**
+```bash
+KAGGLE_USERNAME=jankowalski
+KAGGLE_KEY=abc123def456ghi789jkl012...
+```
+
+⚠️ **UWAGA**: Plik `.env` jest już w `.gitignore` - nie zostanie commitowany!
+
+### Główne ustawienia w `config.py`:
+
+- **Dataset**: HAM10000 (7 klas dermatologicznych) - pobierany automatycznie z Kaggle
 - **Modele**: ViT-Base, ResNet50, EfficientNet-B0
 - **Batch size**: 32
 - **Learning rate**: 1e-4
@@ -254,10 +274,22 @@ Projekt używa HAM10000 - dataset do klasyfikacji zmian skórnych:
 - **Obrazy**: ~10,000 zdjęć dermatologicznych
 - **Format**: JPEG, normalizowane do 224x224
 
-### Pobieranie prawdziwych danych
+### 🎯 Automatyczne pobieranie z Kaggle (Zalecane!)
+
+Najłatwiejszy sposób to użycie Kaggle API:
+
+```bash
+# 1. Skonfiguruj Kaggle API
+python scripts/setup_kaggle.py
+
+# 2. Dataset zostanie automatycznie pobrany przy pierwszym uruchomieniu
+python src/data/dataset_downloader.py
+```
+
+### Alternatywnie - Pobieranie ręczne
 
 Dla najlepszych wyników pobierz HAM10000 z:
-- [Kaggle](https://www.kaggle.com/datasets/kmader/skin-cancer-mnist-ham10000)
+- [Kaggle](https://www.kaggle.com/datasets/kmader/skin-cancer-mnist-ham10000) ⭐ **Zalecane**
 - [ISIC Archive](https://challenge.isic-archive.com/data/)
 
 Umieść w folderze `data/`:
@@ -266,6 +298,19 @@ data/
 ├── HAM10000_metadata.csv
 ├── HAM10000_images_part_1/
 └── HAM10000_images_part_2/
+```
+
+### Konfiguracja Kaggle API
+
+1. **Utwórz konto** na [kaggle.com](https://www.kaggle.com)
+2. **Pobierz API token**: Account → API → Create New API Token
+3. **Skonfiguruj**: Uruchom `python scripts/setup_kaggle.py`
+
+Lub ręcznie:
+```bash
+mkdir -p ~/.kaggle
+cp kaggle.json ~/.kaggle/
+chmod 600 ~/.kaggle/kaggle.json
 ```
 
 ## 🎓 Cele badawcze

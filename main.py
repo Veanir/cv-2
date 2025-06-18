@@ -8,6 +8,14 @@ import numpy as np
 import random
 from datetime import datetime
 import json
+from dotenv import load_dotenv
+import wandb
+import pandas as pd
+from typing import Dict, Tuple
+from torch.utils.data import DataLoader
+
+# Wczytaj zmienne środowiskowe z pliku .env
+load_dotenv()
 
 # Import konfiguracji
 from config import (
@@ -19,8 +27,8 @@ from src.data.dataset import create_dataloaders
 from src.models.vision_transformer import create_vit_model
 from src.models.cnn_models import create_cnn_model
 from src.training.trainer import ModelTrainer
-# from src.evaluation.evaluator import ModelEvaluator  # TODO: Implement later
-# from src.evaluation.visualizer import ResultVisualizer  # TODO: Implement later
+from src.evaluation.evaluator import ModelEvaluator
+from src.evaluation.visualizer import ResultVisualizer
 
 def set_seed(seed: int = 42):
     """Ustawia seed dla reprodukowalności"""
@@ -41,16 +49,13 @@ def get_device():
         print("Używam CPU")
     return device
 
-def create_experiment_config(model_type: str, 
-                           model_name: str,
-                           dataset_fraction: float = 1.0,
-                           fine_tune: bool = False):
-    """Tworzy konfigurację eksperymentu"""
+def setup_experiment(model_type: str, model_name: str, dataset_fraction: float, fine_tune: bool) -> Dict:
+    """Tworzy konfigurację eksperymentu i ustawia początkowe wartości."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     experiment_name = f"{model_type}_{model_name.replace('/', '_')}_{timestamp}"
     
     if dataset_fraction < 1.0:
-        experiment_name += f"_frac_{dataset_fraction}"
+        experiment_name += f"_frac_{dataset_fraction:.2f}"
     if fine_tune:
         experiment_name += "_finetune"
         
@@ -63,30 +68,13 @@ def create_experiment_config(model_type: str,
         'timestamp': timestamp
     }
     
+    # Globalne ustawienia
+    set_seed(42)
+    
     return config
 
-def run_single_experiment(model_type: str,
-                         model_name: str, 
-                         dataset_fraction: float = 1.0,
-                         fine_tune: bool = False):
-    """Uruchamia pojedynczy eksperyment"""
-    
-    print(f"\n{'='*60}")
-    print(f"EKSPERYMENT: {model_type.upper()} - {model_name}")
-    print(f"Dataset fraction: {dataset_fraction}")
-    print(f"Fine-tuning: {fine_tune}")
-    print(f"{'='*60}\n")
-    
-    # Ustawienia
-    set_seed(42)
-    device = get_device()
-    
-    # Konfiguracja eksperymentu
-    exp_config = create_experiment_config(
-        model_type, model_name, dataset_fraction, fine_tune
-    )
-    
-    # Załaduj dane
+def load_data(dataset_fraction: float) -> Tuple:
+    """Ładuje i opcjonalnie ogranicza zbiory danych."""
     print("Ładowanie danych...")
     train_loader, val_loader, test_loader = create_dataloaders(
         data_dir=data_config.data_dir,
@@ -95,9 +83,8 @@ def run_single_experiment(model_type: str,
         num_workers=data_config.num_workers
     )
     
-    # Ogranicz rozmiar datasetu jeśli wymagane
     if dataset_fraction < 1.0:
-        print(f"Ograniczam dataset do {dataset_fraction*100}% próbek...")
+        print(f"Ograniczam dataset do {dataset_fraction*100:.0f}% próbek...")
         train_loader = limit_dataloader(train_loader, dataset_fraction)
         val_loader = limit_dataloader(val_loader, dataset_fraction)
     
@@ -106,111 +93,265 @@ def run_single_experiment(model_type: str,
     print(f"  Val: {len(val_loader.dataset)}")
     print(f"  Test: {len(test_loader.dataset)}")
     
-    # Utwórz model
-    print(f"\nTworzenie modelu {model_type}...")
+    return train_loader, val_loader, test_loader
+
+def get_dataset_stats(loader: DataLoader) -> Dict:
+    """Analizuje DataLoader i zwraca statystyki dotyczące dystrybucji klas."""
+    
+    # Upewnij się, że mamy dostęp do pełnego datasetu, a nie Subset
+    dataset = loader.dataset
+    if isinstance(dataset, torch.utils.data.Subset):
+        dataset = dataset.dataset
+        
+    # Użyj wewnętrznej ramki danych do analizy
+    df = dataset.data[dataset.data['split'] == dataset.split]
+    
+    class_counts = df['dx'].value_counts()
+    total_samples = len(df)
+    
+    stats = {
+        'total_samples': total_samples,
+        'class_distribution_abs': class_counts.to_dict(),
+        'class_distribution_perc': (class_counts / total_samples * 100).round(2).to_dict()
+    }
+    return stats
+
+def create_model(model_type: str, model_name: str, fine_tune: bool) -> torch.nn.Module:
+    """Tworzy i konfiguruje model."""
+    print(f"\nTworzenie modelu {model_type.upper()}...")
+    
+    # Wspólna konfiguracja modelu
+    freeze = model_config.freeze_backbone and not fine_tune
+    
     if model_type == 'vit':
         model_config_dict = {
-            'type': 'single',
             'vit_model_name': model_name,
             'num_classes': model_config.num_classes,
             'vit_pretrained': model_config.vit_pretrained,
-            'freeze_backbone': model_config.freeze_backbone and not fine_tune,
+            'freeze_backbone': freeze,
             'dropout_rate': model_config.dropout_rate
         }
         model = create_vit_model(model_config_dict)
     elif model_type == 'cnn':
         model_config_dict = {
-            'type': 'single',
             'cnn_model_name': model_name,
             'num_classes': model_config.num_classes,
             'cnn_pretrained': model_config.cnn_pretrained,
-            'freeze_backbone': model_config.freeze_backbone and not fine_tune,
+            'freeze_backbone': freeze,
             'dropout_rate': model_config.dropout_rate
         }
         model = create_cnn_model(model_config_dict)
     else:
         raise ValueError(f"Nieznany typ modelu: {model_type}")
         
-    # Informacje o modelu
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return model, model_config_dict
+
+def run_single_experiment(model_type: str,
+                         model_name: str, 
+                         dataset_fraction: float = 1.0,
+                         fine_tune: bool = False):
+    """Uruchamia pojedynczy, w pełni skonfigurowany eksperyment."""
     
-    print(f"Parametry modelu:")
-    print(f"  Łącznie: {total_params:,}")
-    print(f"  Trenowalne: {trainable_params:,}")
-    print(f"  Zamrożone: {total_params - trainable_params:,}")
+    # 1. Konfiguracja
+    exp_config = setup_experiment(model_type, model_name, dataset_fraction, fine_tune)
+    device = get_device()
     
-    # Konfiguracja treningu
-    training_config_dict = {
-        'epochs': training_config.epochs,
-        'learning_rate': training_config.learning_rate,
-        'weight_decay': training_config.weight_decay,
-        'optimizer': training_config.optimizer,
-        'scheduler': training_config.scheduler,
-        'patience': training_config.patience,
-        'min_delta': training_config.min_delta,
-        'log_wandb': experiment_config.log_wandb
-    }
-    
-    # Trening
-    print("\nRozpoczynanie treningu...")
-    trainer = ModelTrainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        config=training_config_dict,
-        device=device,
-        experiment_name=exp_config['experiment_name']
-    )
-    
-    history = trainer.train()
-    
-    # Ewaluacja
-    print("\nEwaluacja modelu...")
-    test_results = trainer.evaluate(test_loader)
-    
-    # Zapisz wyniki
-    results_dir = os.path.join(experiment_config.output_dir, exp_config['experiment_name'])
-    os.makedirs(results_dir, exist_ok=True)
-    
-    # Zapisz konfigurację
-    with open(os.path.join(results_dir, 'config.json'), 'w') as f:
-        config_to_save = {
-            **exp_config,
-            'model_config': model_config_dict,
-            'training_config': training_config_dict,
-            'data_config': {
-                'batch_size': data_config.batch_size,
-                'img_size': data_config.img_size,
-                'dataset_name': data_config.dataset_name
+    # Inicjalizacja WandB dla tego konkretnego eksperymentu
+    if experiment_config.log_wandb:
+        wandb.init(
+            project=experiment_config.experiment_name,
+            name=exp_config['experiment_name'],
+            config={
+                'experiment': exp_config,
+                'data_config': data_config.__dict__,
+                'model_config': model_config.__dict__,
+                'training_config': training_config.__dict__
+            },
+            reinit=True # Pozwala na wielokrotne init w jednym procesie
+        )
+
+    try:
+        print(f"\n{'='*60}")
+        print(f"ROZPOCZYNAM EKSPERYMENT: {exp_config['experiment_name']}")
+        print(f"{'='*60}\n")
+        
+        # 2. Ładowanie danych
+        train_loader, val_loader, test_loader = load_data(dataset_fraction)
+        
+        # Generowanie statystyk datasetu
+        train_stats = get_dataset_stats(train_loader)
+        val_stats = get_dataset_stats(val_loader)
+        print("\n📊 Statystyki zbioru treningowego:")
+        print(json.dumps(train_stats, indent=2))
+
+        # 3. Tworzenie modelu
+        model, model_cfg_dict = create_model(model_type, model_name, fine_tune)
+            
+        # Informacje o modelu
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
+        print(f"Parametry modelu:")
+        print(f"  Łącznie: {total_params:,}")
+        print(f"  Trenowalne: {trainable_params:,}")
+        print(f"  Zamrożone: {total_params - trainable_params:,}")
+        
+        # 4. Konfiguracja treningu
+        training_config_dict = {
+            'epochs': training_config.epochs,
+            'learning_rate': training_config.learning_rate,
+            'weight_decay': training_config.weight_decay,
+            'optimizer': training_config.optimizer,
+            'scheduler': training_config.scheduler,
+            'patience': training_config.patience,
+            'min_delta': training_config.min_delta,
+            'log_wandb': experiment_config.log_wandb
+        }
+        
+        # 5. Trening
+        print("\nRozpoczynanie treningu...")
+        trainer = ModelTrainer(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            config=training_config_dict,
+            device=device,
+            experiment_name=exp_config['experiment_name']
+        )
+        
+        history = trainer.train()
+        
+        # 6. Ewaluacja
+        print("\nEwaluacja modelu...")
+        
+        # Poprawka dla uzyskania CLASS_NAMES z obiektu Subset
+        if isinstance(train_loader.dataset, torch.utils.data.Subset):
+            class_names = train_loader.dataset.dataset.CLASS_NAMES
+        else:
+            class_names = train_loader.dataset.CLASS_NAMES
+
+        evaluator = ModelEvaluator(
+            model=trainer.get_best_model(),
+            device=device,
+            class_names=class_names
+        )
+        test_results = evaluator.evaluate(test_loader)
+        
+        # 7. Zapisywanie wyników i wizualizacji
+        results_dir = os.path.join(experiment_config.output_dir, exp_config['experiment_name'])
+        os.makedirs(results_dir, exist_ok=True)
+        
+        # Zapisz konfigurację
+        with open(os.path.join(results_dir, 'config.json'), 'w') as f:
+            config_to_save = {
+                **exp_config,
+                'model_config': model_cfg_dict,
+                'training_config': training_config_dict,
+                'data_config': {
+                    'batch_size': data_config.batch_size,
+                    'img_size': data_config.img_size,
+                    'dataset_name': data_config.dataset_name,
+                    'class_names': class_names
+                },
+                'dataset_stats': {
+                    'training': train_stats,
+                    'validation': val_stats
+                }
+            }
+            json.dump(config_to_save, f, indent=2)
+        
+        # Zapisz "surowe" wyniki do dedykowanych plików
+        # Macierz pomyłek
+        cm_path = os.path.join(results_dir, 'confusion_matrix.json')
+        with open(cm_path, 'w') as f:
+            json.dump(test_results['confusion_matrix'].tolist(), f)
+
+        # Szczegóły predykcji dla próbek
+        vis_samples = test_results.get('visualization_samples', {})
+        if vis_samples and 'image_ids' in vis_samples:
+            pred_details_df = pd.DataFrame({
+                'image_id': vis_samples['image_ids'],
+                'true_label': [class_names[i] for i in vis_samples['labels']],
+                'predicted_label': [class_names[i] for i in vis_samples['predictions']]
+            })
+            pred_details_path = os.path.join(results_dir, 'predictions_details.csv')
+            pred_details_df.to_csv(pred_details_path, index=False)
+        
+        # Zapisz główne wyniki do JSON (bez dużych obiektów)
+        results_to_save = {
+            'history': history,
+            'test_results': {
+                'accuracy': test_results['accuracy'],
+                'f1_weighted': test_results['f1_weighted'],
+                'classification_report': test_results['classification_report']
+            },
+            'model_info': {
+                'total_params': total_params,
+                'trainable_params': trainable_params,
+                'model_type': model_type,
+                'model_name': model_name
             }
         }
-        json.dump(config_to_save, f, indent=2)
-    
-    # Zapisz wyniki
-    results_to_save = {
-        'history': history,
-        'test_results': {
-            'accuracy': test_results['accuracy'],
-            'f1_weighted': test_results['f1_weighted'],
-            'classification_report': test_results['classification_report']
-        },
-        'model_info': {
-            'total_params': total_params,
-            'trainable_params': trainable_params,
-            'model_type': model_type,
-            'model_name': model_name
-        }
-    }
-    
-    with open(os.path.join(results_dir, 'results.json'), 'w') as f:
-        json.dump(results_to_save, f, indent=2, default=str)
-    
-    print(f"\nWyniki zapisane w: {results_dir}")
-    print(f"Test Accuracy: {test_results['accuracy']:.4f}")
-    print(f"Test F1: {test_results['f1_weighted']:.4f}")
-    
-    return results_to_save
+        
+        vis_samples = test_results.pop('visualization_samples', None)
+
+        with open(os.path.join(results_dir, 'results.json'), 'w') as f:
+            # Tworzymy kopię wyników, aby uniknąć modyfikacji oryginału
+            results_copy = test_results.copy()
+            results_copy.pop('confusion_matrix', None)
+            results_copy.pop('predictions', None)
+            results_copy.pop('labels', None)
+            results_copy.pop('probabilities', None)
+            json.dump(results_copy, f, indent=2, default=str)
+        
+        # Wizualizacja
+        visualizer = ResultVisualizer(
+            results_dir=results_dir,
+            class_names=class_names
+        )
+        if vis_samples:
+             test_results['visualization_samples'] = vis_samples
+        visualizer.run_all_visualizations(history, test_results)
+
+        print(f"\nWyniki i wizualizacje zapisane w: {results_dir}")
+        print(f"Test Accuracy: {test_results['accuracy']:.4f}")
+        print(f"Test F1: {test_results['f1_weighted']:.4f}")
+        
+        # Logowanie artefaktów do WandB na koniec
+        if experiment_config.log_wandb and wandb.run is not None:
+            print("\n🧹 Logowanie artefaktów do WandB...")
+
+            # Loguj wszystkie obrazy z folderu wyników
+            for file_name in os.listdir(results_dir):
+                if file_name.endswith(('.png', '.jpg', '.jpeg')):
+                    path = os.path.join(results_dir, file_name)
+                    wandb.log({f"media/{os.path.splitext(file_name)[0]}": wandb.Image(path)})
+
+            # Loguj raport klasyfikacji jako tabelę
+            report_path = os.path.join(results_dir, 'classification_report.csv')
+            if os.path.exists(report_path):
+                try:
+                    report_df = pd.read_csv(report_path)
+                    wandb.log({"classification_report_table": wandb.Table(dataframe=report_df)})
+                except Exception as e:
+                    print(f"⚠️ Nie udało się zalogować raportu klasyfikacji: {e}")
+
+            # Zaktualizuj podsumowanie w WandB
+            wandb.run.summary["test_accuracy"] = test_results['accuracy']
+            wandb.run.summary["test_f1_weighted"] = test_results['f1_weighted']
+            wandb.run.summary["total_params"] = total_params
+            wandb.run.summary["trainable_params"] = trainable_params
+            wandb.run.summary.update({"dataset_stats_train": train_stats})
+            
+            print("✅ Artefakty zalogowane do WandB.")
+
+        return results_to_save
+
+    finally:
+        # Zawsze zamykaj run WandB
+        if experiment_config.log_wandb and wandb.run is not None:
+            wandb.finish()
+            print("🧹 Run WandB zakończony.")
 
 def limit_dataloader(dataloader, fraction):
     """Ogranicza rozmiar DataLoader'a"""
@@ -224,7 +365,7 @@ def limit_dataloader(dataloader, fraction):
     return torch.utils.data.DataLoader(
         limited_dataset,
         batch_size=dataloader.batch_size,
-        shuffle=dataloader.drop_last,
+        shuffle=True, # Shuffle dla ograniczonego zbioru
         num_workers=dataloader.num_workers,
         pin_memory=dataloader.pin_memory
     )

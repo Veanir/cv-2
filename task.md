@@ -53,3 +53,13 @@ Przygotowanie raportu w formie posteru zawierającego:
 - użycie zaawansowanych modeli (np. Vision Transformer)
 - eksperymenty z generalizacją (inne zbiory danych, transfer learning)
 - własny zbiór danych lub nietypowy problem (np. segmentacja, super resolution)
+
+# Wybrana hipoteza:
+```
+Vision Transformers osiągają lepszą dokładność niż tradycyjne CNN w klasyfikacji zdjęć dermatologicznych, szczególnie przy ograniczonych danych treningowych
+```
+
+Porównanie nowoczesnych architektur (ViT vs ResNet/EfficientNet)
+Zastosowanie w medycynie (wysokie znaczenie praktyczne)
+Możliwość badania transfer learning z różnych pre-trained models
+Analiza wpływu wielkości datasetu na performance

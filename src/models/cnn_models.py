@@ -8,146 +8,72 @@ import timm
 from typing import Dict, Any, Optional
 
 class MedicalCNN(nn.Module):
-    """CNN dostosowany do klasyfikacji medycznej"""
+    """
+    Uniwersalna klasa CNN dla klasyfikacji medycznej, oparta na bibliotece `timm`.
+    """
     
     def __init__(self,
                  model_name: str = "resnet50",
                  num_classes: int = 7,
                  pretrained: bool = True,
                  freeze_backbone: bool = False,
-                 dropout_rate: float = 0.1):
+                 dropout_rate: float = 0.5): # Zwiększony domyślny dropout
         """
         Args:
-            model_name: Nazwa architektury (resnet50, efficientnet_b0, densenet121, etc.)
+            model_name: Nazwa dowolnej architektury z biblioteki `timm`
             num_classes: Liczba klas
             pretrained: Czy użyć pretrenowanych wag
             freeze_backbone: Czy zamrozić backbone
-            dropout_rate: Współczynnik dropout
+            dropout_rate: Współczynnik dropout w głowicy klasyfikacyjnej
         """
         super().__init__()
         
         self.model_name = model_name
         self.num_classes = num_classes
         
-        # Utwórz model bazowy
-        if model_name.startswith('resnet'):
-            self.backbone = self._create_resnet(model_name, pretrained)
-            feature_dim = self.backbone.fc.in_features
-            self.backbone.fc = nn.Identity()  # Usuń ostatnią warstwę
-            
-        elif model_name.startswith('efficientnet'):
-            self.backbone = timm.create_model(model_name, pretrained=pretrained)
-            feature_dim = self.backbone.classifier.in_features
-            self.backbone.classifier = nn.Identity()
-            
-        elif model_name.startswith('densenet'):
-            self.backbone = getattr(models, model_name)(pretrained=pretrained)
-            feature_dim = self.backbone.classifier.in_features
-            self.backbone.classifier = nn.Identity()
-            
-        elif model_name.startswith('vgg'):
-            self.backbone = getattr(models, model_name)(pretrained=pretrained)
-            feature_dim = self.backbone.classifier[6].in_features
-            self.backbone.classifier = nn.Identity()
-            
-        else:
-            # Użyj timm dla innych modeli
-            self.backbone = timm.create_model(model_name, pretrained=pretrained, num_classes=0)
-            feature_dim = self.backbone.num_features
-            
-        # Dodatkowe warstwy dla klasyfikacji medycznej
+        # Utwórz model bazowy za pomocą timm, bez głowicy klasyfikacyjnej
+        self.backbone = timm.create_model(
+            model_name, 
+            pretrained=pretrained, 
+            num_classes=0  # num_classes=0 usuwa oryginalną głowicę
+        )
+        
+        # Pobierz wymiar cech z backbone'u
+        feature_dim = self.backbone.num_features
+        
+        # Stwórz nową, konfigurowalną głowicę klasyfikacyjną
         self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Flatten(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(feature_dim, feature_dim // 2),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate),
-            nn.Linear(feature_dim // 2, feature_dim // 4),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate),
-            nn.Linear(feature_dim // 4, num_classes)
+            nn.Dropout(p=dropout_rate),
+            nn.Linear(feature_dim, num_classes)
         )
         
         # Opcjonalnie zamroź backbone
         if freeze_backbone:
             self._freeze_backbone()
             
-        # Inicjalizacja wag nowych warstw
-        self._init_classifier_weights()
-        
-    def _create_resnet(self, model_name: str, pretrained: bool):
-        """Tworzy model ResNet"""
-        if model_name == 'resnet18':
-            return models.resnet18(pretrained=pretrained)
-        elif model_name == 'resnet34':
-            return models.resnet34(pretrained=pretrained)
-        elif model_name == 'resnet50':
-            return models.resnet50(pretrained=pretrained)
-        elif model_name == 'resnet101':
-            return models.resnet101(pretrained=pretrained)
-        elif model_name == 'resnet152':
-            return models.resnet152(pretrained=pretrained)
-        else:
-            raise ValueError(f"Nieznany model ResNet: {model_name}")
-            
     def _freeze_backbone(self):
-        """Zamraża parametry backbone'u"""
+        """Zamraża parametry backbone'u."""
         for param in self.backbone.parameters():
             param.requires_grad = False
             
     def unfreeze_backbone(self):
-        """Odmraża parametry backbone'u"""
+        """Odmraża parametry backbone'u."""
         for param in self.backbone.parameters():
             param.requires_grad = True
             
-    def _init_classifier_weights(self):
-        """Inicjalizuje wagi klasyfikatora"""
-        for m in self.classifier.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                nn.init.constant_(m.bias, 0)
-                
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass"""
         features = self.backbone(x)
-        
-        # Dla niektórych modeli może być potrzebne dodatkowe pooling
-        if len(features.shape) == 4:  # [B, C, H, W]
-            features = nn.AdaptiveAvgPool2d((1, 1))(features)
-            features = features.flatten(1)
-            
-        # Usuń warstwy pooling z klasyfikatora jeśli feature jest już spłaszczony
-        if len(features.shape) == 2:
-            classifier = nn.Sequential(*list(self.classifier.children())[2:])  # Pomijaj pooling i flatten
-            output = classifier(features)
-        else:
-            output = self.classifier(features)
-            
+        # 'features' jest już spłaszczonym tensorem cech [B, num_features]
+        output = self.classifier(features)
         return output
         
-    def get_feature_maps(self, x: torch.Tensor, layer_name: Optional[str] = None):
-        """Zwraca mapy cech z określonej warstwy"""
-        features = {}
-        
-        def hook_fn(module, input, output):
-            features['output'] = output
-            
-        # Zarejestruj hook na ostatniej warstwie konwolucyjnej
-        if self.model_name.startswith('resnet'):
-            hook = self.backbone.layer4.register_forward_hook(hook_fn)
-        elif self.model_name.startswith('efficientnet'):
-            hook = self.backbone.blocks[-1].register_forward_hook(hook_fn)
-        else:
-            # Domyślnie ostatnia warstwa
-            hook = list(self.backbone.children())[-2].register_forward_hook(hook_fn)
-            
-        # Forward pass
-        with torch.no_grad():
-            _ = self.backbone(x)
-            
-        hook.remove()
-        return features.get('output', None)
+    def get_feature_maps(self, x: torch.Tensor):
+        """
+        Zwraca mapy cech z ostatniej warstwy konwolucyjnej.
+        Używa wbudowanej funkcji `timm` do ekstrakcji cech.
+        """
+        return self.backbone.forward_features(x)
 
 
 class CNNEnsemble(nn.Module):

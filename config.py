@@ -76,4 +76,28 @@ experiment_config = ExperimentConfig()
 os.makedirs(data_config.data_dir, exist_ok=True)
 os.makedirs(experiment_config.output_dir, exist_ok=True)
 os.makedirs("logs", exist_ok=True)
-os.makedirs("checkpoints", exist_ok=True) 
+os.makedirs("checkpoints", exist_ok=True)
+
+
+def check_data_ready() -> bool:
+    """Sprawdza czy dane są gotowe do użycia"""
+    try:
+        # Import tutaj aby uniknąć circular import
+        from src.data.dataset_downloader import check_ham10000_available
+        return check_ham10000_available(data_config.data_dir)
+    except ImportError:
+        return False
+
+
+def ensure_data_ready():
+    """Upewnia się, że dane są gotowe lub pokazuje instrukcje"""
+    if check_data_ready():
+        print(f"✅ Dataset HAM10000 gotowy w {data_config.data_dir}")
+        return True
+    else:
+        print(f"⚠️ Dataset HAM10000 nie znaleziony w {data_config.data_dir}")
+        print("💡 Uruchom jeden z:")
+        print("   python scripts/setup_kaggle.py  # Konfiguracja Kaggle API")
+        print("   python test_kaggle_download.py  # Test pobierania")
+        print("   python main.py                  # Automatyczne pobieranie")
+        return False 

@@ -3,18 +3,22 @@ services:
   vit-cnn-research:
     build: .
     container_name: vit_cnn_medical
+    shm_size: '2gb'
     volumes:
       # Montuj dane i wyniki, żeby persistowały
       - ./data:/app/data
       - ./results:/app/results
       - ./logs:/app/logs
       - ./checkpoints:/app/checkpoints
-      # Montuj kod dla development (opcjonalne)
+      # Montuj kod, aby zawsze używać najnowszej wersji
       - ./src:/app/src
+      - ./scripts:/app/scripts
       - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
+      - ./test_setup.py:/app/test_setup.py
     environment:
       - PYTHONPATH=/app
-      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}
+      - WANDB_API_KEY=${WANDB_API_KEY}
     deploy:
       resources:
         reservations:
@@ -24,15 +28,30 @@ services:
               capabilities: [gpu]
     command: python test_setup.py
     
+  # Serwis do przygotowania danych (uruchom raz)
+  prepare-data:
+    build: .
+    container_name: vit_cnn_prepare_data
+    shm_size: '2gb'
+    volumes:
+      - ./data:/app/data
+    command: python scripts/prepare_dataset.py
+
   # Serwis do uruchamiania testów
   test:
     build: .
     container_name: vit_cnn_test
+    shm_size: '2gb'
     volumes:
       - ./data:/app/data
       - ./results:/app/results
+      - ./src:/app/src
+      - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
+      - ./test_setup.py:/app/test_setup.py
     environment:
       - PYTHONPATH=/app
+      - WANDB_API_KEY=${WANDB_API_KEY}
     command: python test_setup.py
     deploy:
       resources:
@@ -45,13 +64,20 @@ services:
   # Serwis do uruchamiania pojedynczych eksperymentów
   experiment:
     build: .
+    shm_size: '2gb'
     volumes:
       - ./data:/app/data
       - ./results:/app/results
       - ./logs:/app/logs
       - ./checkpoints:/app/checkpoints
+      # Montuj kod, aby zawsze używać najnowszej wersji
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
     environment:
       - PYTHONPATH=/app
+      - WANDB_API_KEY=${WANDB_API_KEY}
     deploy:
       resources:
         reservations:
@@ -66,14 +92,20 @@ services:
   comparison:
     build: .
     container_name: vit_cnn_comparison
+    shm_size: '2gb'
     volumes:
       - ./data:/app/data
       - ./results:/app/results
       - ./logs:/app/logs
       - ./checkpoints:/app/checkpoints
+      # Montuj kod, aby zawsze używać najnowszej wersji
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
     environment:
       - PYTHONPATH=/app
-      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}
+      - WANDB_API_KEY=${WANDB_API_KEY}
     deploy:
       resources:
         reservations:

@@ -59,12 +59,8 @@ class ModelTrainer:
         
         # Setup logowania
         self.use_wandb = config.get('log_wandb', False)
-        if self.use_wandb:
-            wandb.init(
-                project="vit_vs_cnn_medical",
-                name=experiment_name,
-                config=config
-            )
+        if self.use_wandb and wandb.run is not None:
+            # Obserwuj model, jeśli run jest aktywny
             wandb.watch(self.model)
             
         # Early stopping
@@ -77,6 +73,7 @@ class ModelTrainer:
         # Checkpointing
         self.checkpoint_dir = os.path.join("checkpoints", experiment_name)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
+        self.best_model_path = os.path.join(self.checkpoint_dir, 'best_model.pth')
         
     def _setup_optimizer(self) -> optim.Optimizer:
         """Konfiguruje optymalizator"""
@@ -108,13 +105,40 @@ class ModelTrainer:
             raise ValueError(f"Nieznany scheduler: {scheduler_name}")
             
     def _setup_criterion(self) -> nn.Module:
-        """Konfiguruje funkcję straty"""
-        # Oblicz wagi klas jeśli dataset je udostępnia
-        if hasattr(self.train_loader.dataset, 'get_class_weights'):
-            class_weights = self.train_loader.dataset.get_class_weights()
-            class_weights = class_weights.to(self.device)
-            return nn.CrossEntropyLoss(weight=class_weights)
+        """
+        Konfiguruje funkcję straty. Jeśli w konfiguracji jest włączone ważenie,
+        dynamicznie oblicza wagi na podstawie aktualnego `train_loader`.
+        """
+        # Sprawdzenie, czy stosować ważenie klas
+        if self.config.get('use_class_weighting', True):
+            print("⚖️ Obliczanie wag klas na podstawie danych treningowych...")
+            
+            # Pobierz liczbę klas z modelu
+            num_classes = self.model.num_classes
+            
+            # Iteruj po loaderze, aby zliczyć klasy
+            class_counts = torch.zeros(num_classes, dtype=torch.float)
+            for _, labels, _ in self.train_loader:
+                for label in labels:
+                    class_counts[label] += 1
+            
+            # Unikaj dzielenia przez zero
+            total_samples = class_counts.sum()
+            if total_samples == 0:
+                 print("⚠️ Brak danych w train_loader, używam standardowej funkcji straty.")
+                 return nn.CrossEntropyLoss()
+
+            # Oblicz wagi (inverse frequency)
+            class_weights = total_samples / (num_classes * class_counts)
+            
+            # Obsługa klas, które mogą nie wystąpić w małych próbkach
+            class_weights[class_counts == 0] = 1.0 
+            
+            print(f"   Obliczone wagi: {[f'{w:.2f}' for w in class_weights]}")
+            
+            return nn.CrossEntropyLoss(weight=class_weights.to(self.device))
         else:
+            print("ℹ️ Stosowanie standardowej funkcji straty (bez ważenia).")
             return nn.CrossEntropyLoss()
             
     def train_epoch(self) -> Dict[str, float]:
@@ -125,7 +149,7 @@ class ModelTrainer:
         all_labels = []
         
         pbar = tqdm(self.train_loader, desc="Training")
-        for batch_idx, (images, labels) in enumerate(pbar):
+        for batch_idx, (images, labels, _) in enumerate(pbar):
             images, labels = images.to(self.device), labels.to(self.device)
             
             # Zero gradients
@@ -182,7 +206,7 @@ class ModelTrainer:
         
         with torch.no_grad():
             pbar = tqdm(self.val_loader, desc="Validation")
-            for batch_idx, (images, labels) in enumerate(pbar):
+            for batch_idx, (images, labels, _) in enumerate(pbar):
                 images, labels = images.to(self.device), labels.to(self.device)
                 
                 # Forward pass
@@ -235,8 +259,27 @@ class ModelTrainer:
         
         # Zapisz najlepszy model
         if is_best:
-            torch.save(checkpoint, os.path.join(self.checkpoint_dir, 'best_model.pth'))
+            torch.save(checkpoint, self.best_model_path)
             print(f"Zapisano najlepszy model (epoch {epoch})")
+
+            # Loguj najlepszy model do WandB jako artefakt
+            if self.use_wandb and wandb.run is not None:
+                try:
+                    artifact = wandb.Artifact(
+                        name=f"model-{self.experiment_name}",
+                        type="model",
+                        metadata={
+                            "epoch": epoch,
+                            "val_loss": self.best_val_loss,
+                            "val_acc": self.best_val_acc,
+                            "model_class": self.model.__class__.__name__
+                        }
+                    )
+                    artifact.add_file(self.best_model_path)
+                    wandb.log_artifact(artifact, aliases=["best", f"epoch_{epoch}"])
+                    print("🧹 Zalogowano najlepszy model do WandB.")
+                except Exception as e:
+                    print(f"⚠️ Nie udało się zalogować modelu do WandB: {e}")
             
     def load_checkpoint(self, checkpoint_path: str):
         """Ładuje checkpoint"""
@@ -249,31 +292,30 @@ class ModelTrainer:
         
         return checkpoint['epoch']
         
-    def early_stopping_check(self, val_metrics: Dict[str, float]) -> bool:
-        """Sprawdza warunki early stopping"""
-        val_loss = val_metrics['loss']
-        val_acc = val_metrics['accuracy']
+    def early_stopping_check(self, val_loss: float) -> Tuple[bool, bool]:
+        """
+        Sprawdza warunki early stopping na podstawie val_loss.
         
-        # Sprawdź czy nastąpiła poprawa
-        improved = False
+        Zwraca:
+            Tuple[bool, bool]: (czy należy zatrzymać trening, czy to jest najlepszy model)
+        """
+        is_best = False
         if val_loss < self.best_val_loss - self.min_delta:
+            # Poprawa, zapisz model i zresetuj cierpliwość
             self.best_val_loss = val_loss
-            improved = True
-            
-        if val_acc > self.best_val_acc + self.min_delta:
-            self.best_val_acc = val_acc
-            improved = True
-            
-        if improved:
             self.patience_counter = 0
-            return False
+            is_best = True
+            print(f"✅ Poprawa walidacji! Nowa najlepsza strata: {self.best_val_loss:.4f}")
         else:
+            # Brak poprawy, zwiększ licznik cierpliwości
             self.patience_counter += 1
-            if self.patience_counter >= self.patience:
-                print(f"Early stopping po {self.patience_counter} epokach bez poprawy")
-                return True
-                
-        return False
+            print(f"⚠️ Brak poprawy. Cierpliwość: {self.patience_counter}/{self.patience}")
+
+        should_stop = self.patience_counter >= self.patience
+        if should_stop:
+            print(f"⏳ Early stopping! Osiągnięto limit cierpliwości.")
+
+        return should_stop, is_best
         
     def train(self, epochs: Optional[int] = None) -> Dict[str, List[float]]:
         """Główna funkcja treningu"""
@@ -330,76 +372,33 @@ class ModelTrainer:
                     'lr': self.optimizer.param_groups[0]['lr']
                 })
                 
-            # Zapisz checkpoint
-            is_best = (val_metrics['accuracy'] >= self.best_val_acc or 
-                      val_metrics['loss'] <= self.best_val_loss)
-            self.save_checkpoint(epoch + 1, is_best)
-            
-            # Early stopping
-            if self.early_stopping_check(val_metrics):
+            # Early stopping i zapis checkpointa
+            should_stop, is_best = self.early_stopping_check(val_metrics['loss'])
+            self.save_checkpoint(epoch + 1, is_best=is_best)
+
+            if should_stop:
                 break
                 
         total_time = time.time() - start_time
         print(f"\nTrening zakończony w {total_time:.2f} sekund")
         print(f"Najlepsza walidacyjna dokładność: {self.best_val_acc:.4f}")
+        print(f"Najlepszy model zapisany w: {self.best_model_path}")
         
         return {
             'train_history': self.train_history,
             'val_history': self.val_history
         }
-        
-    def evaluate(self, test_loader: DataLoader) -> Dict[str, Any]:
-        """Ewaluuje model na zbiorze testowym"""
-        print("Ewaluacja na zbiorze testowym...")
-        
-        self.model.eval()
-        all_predictions = []
-        all_labels = []
-        all_probs = []
-        
-        with torch.no_grad():
-            for images, labels in tqdm(test_loader, desc="Testing"):
-                images, labels = images.to(self.device), labels.to(self.device)
-                
-                outputs = self.model(images)
-                probs = torch.softmax(outputs, dim=1)
-                predictions = outputs.argmax(dim=1)
-                
-                all_predictions.extend(predictions.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-                all_probs.extend(probs.cpu().numpy())
-                
-        # Oblicz metryki
-        accuracy = accuracy_score(all_labels, all_predictions)
-        f1 = f1_score(all_labels, all_predictions, average='weighted')
-        
-        # Raport klasyfikacji
-        class_names = getattr(test_loader.dataset, 'CLASS_NAMES', 
-                             [f'Class_{i}' for i in range(len(set(all_labels)))])
-        
-        report = classification_report(
-            all_labels, all_predictions,
-            target_names=class_names,
-            output_dict=True
-        )
-        
-        # Confusion matrix
-        cm = confusion_matrix(all_labels, all_predictions)
-        
-        results = {
-            'accuracy': accuracy,
-            'f1_weighted': f1,
-            'classification_report': report,
-            'confusion_matrix': cm,
-            'predictions': all_predictions,
-            'labels': all_labels,
-            'probabilities': all_probs
-        }
-        
-        print(f"Test Accuracy: {accuracy:.4f}")
-        print(f"Test F1 (weighted): {f1:.4f}")
-        
-        return results
+
+    def get_best_model(self) -> nn.Module:
+        """Ładuje i zwraca najlepszy model z checkpointa"""
+        print(f"Ładowanie najlepszego modelu z: {self.best_model_path}")
+        if not os.path.exists(self.best_model_path):
+            print("⚠️ Nie znaleziono najlepszego modelu, zwracam aktualny.")
+            return self.model
+            
+        checkpoint = torch.load(self.best_model_path, map_location=self.device)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        return self.model
 
 
 if __name__ == "__main__":
@@ -433,5 +432,15 @@ if __name__ == "__main__":
     
     trainer = ModelTrainer(model, train_loader, val_loader, config, device, "test")
     history = trainer.train()
+
+    # Test ewaluacji (teraz poza trenerem)
+    from src.evaluation.evaluator import ModelEvaluator
+    evaluator = ModelEvaluator(
+        model=trainer.get_best_model(),
+        device=device,
+        class_names=[f'Class_{i}' for i in range(7)]
+    )
+    results = evaluator.evaluate(val_loader)
+    print(f"Wyniki ewaluacji testowej: Accuracy={results['accuracy']:.4f}")
     
     print("Test zakończony pomyślnie!") 
