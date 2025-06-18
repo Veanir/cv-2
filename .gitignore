@@ -128,6 +128,9 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Keys and credentials
+.keys/
+
 # Machine Learning / AI specific
 # Data directories
 /data/
