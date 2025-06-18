@@ -23,7 +23,7 @@ except ImportError:
 
 def run_remote_command(sdk: VastAI, instance_id: int, command: str, workdir: str = None):
     """
-    Wykonuje komendę na zdalnej instancji Vast.ai i wyświetla jej output.
+    Wykonuje komendę na zdalnej instancji Vast.ai przez SSH.
     """
     if workdir:
         command = f"cd {workdir} && {command}"
@@ -31,25 +31,90 @@ def run_remote_command(sdk: VastAI, instance_id: int, command: str, workdir: str
     print(f"-> Wykonywanie na instancji {instance_id}: '{command}'")
     
     try:
-        output = sdk.execute(id=instance_id, command=command)
-        if isinstance(output, list) and output:
-            output_str = "".join(output)
-            print("<- Output:")
-            print(output_str)
-        elif isinstance(output, str):
-            print("<- Output:")
-            print(output)
+        # Pobierz informacje SSH dla instancji
+        ssh_info = sdk.ssh_url(id=instance_id)
         
-        # Prosta weryfikacja błędu
-        if output and any(err in str(output).lower() for err in ["error", "fatal", "denied"]):
-            print(f"!!! Ostrzeżenie: Wykryto potencjalny błąd w odpowiedzi. Sprawdź logi.", file=sys.stderr)
+        if not ssh_info:
+            print("!!! Nie udało się uzyskać informacji SSH", file=sys.stderr)
+            return None
+            
+        # ssh_info powinno zawierać informacje o połączeniu SSH
+        print(f"   SSH info: {ssh_info}")
+        
+        # Spróbuj wykonać komendę przez subprocess
+        # Format może być różny, więc najpierw sprawdźmy co otrzymujemy
+        if isinstance(ssh_info, str) and "ssh " in ssh_info:
+            # Jeśli ssh_info to gotowa komenda SSH
+            ssh_cmd = ssh_info.split()
+            full_command = ssh_cmd + [command]
+            
+            print(f"   Wykonywanie SSH: {' '.join(full_command)}")
+            
+            result = subprocess.run(
+                full_command,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minut timeout
+            )
+            
+            if result.stdout:
+                print("<- Output:")
+                print(result.stdout)
+            if result.stderr:
+                print("<- Errors:")
+                print(result.stderr)
+                
+            if result.returncode != 0:
+                print(f"!!! Komenda zakończona z kodem błędu: {result.returncode}", file=sys.stderr)
+                return None
+                
+            return result.stdout
+        else:
+            print(f"!!! Nieoczekiwany format ssh_info: {ssh_info}", file=sys.stderr)
             return None
 
-        return output
-
+    except subprocess.TimeoutExpired:
+        print(f"!!! Timeout podczas wykonywania komendy", file=sys.stderr)
+        return None
     except Exception as e:
         print(f"!!! Wystąpił błąd podczas wykonywania komendy: {e}", file=sys.stderr)
         return None
+
+
+def check_instance_status(sdk: VastAI, instance_id: int):
+    """
+    Sprawdza status instancji i wyświetla podstawowe informacje.
+    """
+    try:
+        print(f"-> Sprawdzanie statusu instancji {instance_id}...")
+        instances = sdk.show_instances()
+        
+        if isinstance(instances, list):
+            target_instance = None
+            for instance in instances:
+                if isinstance(instance, dict) and instance.get('id') == instance_id:
+                    target_instance = instance
+                    break
+            
+            if target_instance:
+                status = target_instance.get('actual_status', 'unknown')
+                print(f"<- Status instancji: {status}")
+                
+                if status != 'running':
+                    print(f"!!! Uwaga: Instancja ma status '{status}', a nie 'running'.")
+                    print("!!! Spróbuj uruchomić instancję w panelu Vast.ai przed użyciem skryptu.")
+                    return False
+                return True
+            else:
+                print(f"!!! Nie znaleziono instancji o ID {instance_id}")
+                return False
+        else:
+            print(f"!!! Nieoczekiwany format odpowiedzi: {instances}")
+            return False
+            
+    except Exception as e:
+        print(f"!!! Błąd podczas sprawdzania statusu: {e}", file=sys.stderr)
+        return False
 
 
 def setup_ssh_key(repo_url: str) -> Path:
@@ -61,39 +126,34 @@ def setup_ssh_key(repo_url: str) -> Path:
     keys_dir.mkdir(exist_ok=True)
     
     private_key_path = keys_dir / "vast_deploy_key"
-    public_key_path = private_key_path.with_suffix(".pub")
-
+    
+    # Jeśli klucz nie istnieje, wygeneruj go i przeprowadź jednorazową konfigurację.
     if not private_key_path.exists():
         print("--- KROK PRZYGOTOWAWCZY: Generowanie klucza SSH do wdrożeń ---")
         print(f"Nie znaleziono klucza w '{private_key_path}'. Generowanie nowego...")
+        public_key_path = private_key_path.with_suffix(".pub")
+        
         subprocess.run(
             [
-                "ssh-keygen",
-                "-t", "ed25519",
-                "-f", str(private_key_path),
-                "-N", "",  # Puste hasło
-                "-C", "vast-ai-deploy-key"
+                "ssh-keygen", "-t", "ed25519", "-f", str(private_key_path),
+                "-N", "", "-C", "vast-ai-deploy-key"
             ],
-            check=True,
-            capture_output=True
+            check=True, capture_output=True
         )
         print(f"Klucz SSH został wygenerowany i zapisany w katalogu '{keys_dir}'.")
     
-    public_key = public_key_path.read_text().strip()
+        public_key = public_key_path.read_text().strip()
 
-    print("\n" + "="*70)
-    print("!!! AKCJA WYMAGANA (jednorazowo) !!!")
-    print("Aby umożliwić instancji klonowanie repozytorium, dodaj poniższy")
-    print("klucz publiczny jako 'Deploy Key' w ustawieniach Twojego repozytorium na GitHub.")
-    print(f"\nLink do dodania klucza: {repo_url.replace('.git', '/settings/keys/new')}")
-    print("\n--- Początek klucza publicznego ---")
-    print(public_key)
-    print("--- Koniec klucza publicznego ---\n")
-    print("Porada: Nazwij klucz 'Vast.ai Deploy Key', aby łatwo go zidentyfikować w przyszłości.")
-    print("Upewnij się, że NIE zaznaczasz opcji 'Allow write access', jeśli klucz ma służyć tylko do odczytu.")
-    print("="*70 + "\n")
-    
-    input("Naciśnij Enter, gdy klucz zostanie dodany do GitHub...")
+        print("\n" + "="*70)
+        print("!!! AKCJA WYMAGANA (jednorazowo) !!!")
+        print("Dodaj poniższy klucz publiczny jako 'Deploy Key' w ustawieniach repozytorium GitHub.")
+        print(f"Link: {repo_url.replace('.git', '/settings/keys/new')}")
+        print("\n--- Początek klucza publicznego ---")
+        print(public_key)
+        print("--- Koniec klucza publicznego ---\n")
+        input("Naciśnij Enter, gdy klucz zostanie dodany do GitHub...")
+    else:
+        print(f"--- Znaleziono istniejący klucz SSH w '{private_key_path}'. ---")
     
     return private_key_path
 
@@ -150,8 +210,12 @@ def main():
     private_key_content = private_key_path.read_text()
 
     # Krok 2: Konfiguracja instancji
-    print("\n--- KROK 1: Inicjalizacja klienta i konfiguracja instancji ---")
+    print("\n--- KROK 1: Inicjalizacja klienta i sprawdzenie statusu instancji ---")
     vast_sdk = VastAI(api_key=args.api_key)
+    
+    # Sprawdzenie statusu instancji przed kontynuowaniem
+    if not check_instance_status(vast_sdk, args.instance_id):
+        sys.exit("Błąd: Instancja nie jest gotowa do wykonywania komend.")
 
     # Przygotowanie katalogu .ssh
     run_remote_command(vast_sdk, args.instance_id, "mkdir -p /root/.ssh && chmod 700 /root/.ssh")

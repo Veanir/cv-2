@@ -140,7 +140,7 @@ raw_data/
 processed_data/
 
 # Model files and checkpoints
-models/
+/models/
 checkpoints/
 *.pth
 *.pt
