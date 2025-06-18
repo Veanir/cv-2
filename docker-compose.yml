@@ -17,14 +17,14 @@ services:
     environment:
       - PYTHONPATH=/app
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}
-    # Dla GPU support (odkomentuj jeśli masz GPU)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    #Dla GPU support (odkomentuj jeśli masz GPU)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     command: python test_setup.py
     
   # Serwis do uruchamiania testów
