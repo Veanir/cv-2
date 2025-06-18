@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # Główny serwis dla treningu i eksperymentów
+  vit-cnn-research:
+    build: .
+    container_name: vit_cnn_medical
+    volumes:
+      # Montuj dane i wyniki, żeby persistowały
+      - ./data:/app/data
+      - ./results:/app/results
+      - ./logs:/app/logs
+      - ./checkpoints:/app/checkpoints
+      # Montuj kod dla development (opcjonalne)
+      - ./src:/app/src
+      - ./config.py:/app/config.py
+    environment:
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}
+    # Dla GPU support (odkomentuj jeśli masz GPU)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    command: python test_setup.py
+    
+  # Serwis do uruchamiania testów
+  test:
+    build: .
+    container_name: vit_cnn_test
+    volumes:
+      - ./data:/app/data
+      - ./results:/app/results
+    environment:
+      - PYTHONPATH=/app
+    command: python test_setup.py
+    
+  # Serwis do uruchamiania pojedynczych eksperymentów
+  experiment:
+    build: .
+    container_name: vit_cnn_experiment
+    volumes:
+      - ./data:/app/data
+      - ./results:/app/results
+      - ./logs:/app/logs
+      - ./checkpoints:/app/checkpoints
+    environment:
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}
+    # Domyślnie uruchamia mały eksperyment testowy
+    command: python main.py --mode single --model_type cnn --model_name resnet18 --fraction 0.1
+    
+  # Serwis do pełnego porównania (długie uruchamianie!)
+  comparison:
+    build: .
+    container_name: vit_cnn_comparison
+    volumes:
+      - ./data:/app/data
+      - ./results:/app/results
+      - ./logs:/app/logs
+      - ./checkpoints:/app/checkpoints
+    environment:
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}
+    command: python main.py --mode comparison
+
+# Sieci (opcjonalne dla przyszłych rozszerzeń)
+networks:
+  default:
+    name: vit_cnn_network 
