@@ -14,17 +14,17 @@ Projekt badawczy porównujący efektywność Vision Transformers i Convolutional
 # 1. Zbuduj obraz Docker
 docker-compose build
 
-# 2. Uruchom testy
-docker-compose run --rm test
+# 2. przygotowanie datasetu
+docker-compose run --rm prepare-data
 
 # 3. Pierwszy eksperyment
-docker-compose run --rm experiment
+docker-compose run --rm comparison
 ```
 
 ## 📁 Struktura projektu
 
 ```
-project_2/
+project/
 ├── src/
 │   ├── data/
 │   │   ├── dataset.py          # HAM10000 dataset loader
@@ -72,45 +72,6 @@ WANDB_API_KEY=twoj_klucz_api_wandb
 - **Learning rate**: 1e-4
 - **Epochs**: 100 (z early stopping)
 
-## 🧪 Dostępne eksperymenty
-
-### Z Docker (zalecane) 🐳
-
-```bash
-# Szybkie testy
-docker-compose run --rm experiment  # CNN ResNet18, 10% danych
-docker-compose run --rm test        # Testy konfiguracji
-
-# Własne eksperymenty
-docker-compose run --rm experiment python main.py \
-  --mode single --model_type vit --model_name google/vit-base-patch16-224 --fraction 0.1
-
-# Pełne porównanie (długie!)
-docker-compose run --rm comparison
-
-# Interaktywny terminal
-docker-compose run --rm -it vit-cnn-research bash
-```
-
-### Eksperymenty lokalne
-
-```bash
-# CNN ResNet50
-python main.py --mode single --model_type cnn --model_name resnet50
-
-# Vision Transformer
-python main.py --mode single --model_type vit --model_name google/vit-base-patch16-224
-
-# Z ograniczonym zbiorem danych
-python main.py --mode single --model_type cnn --model_name resnet50 --fraction 0.25
-
-# Z fine-tuningiem
-python main.py --mode single --model_type vit --model_name google/vit-base-patch16-224 --fine_tune
-
-# Pełne porównanie
-python main.py --mode comparison
-```
-
 ## 📊 Dostępne modele
 
 ### Vision Transformers
@@ -123,13 +84,10 @@ python main.py --mode comparison
 - `densenet121` - DenseNet
 
 ## 🎯 Eksperymenty do hipotezy
-
 Projekt automatycznie testuje:
 
 1. **Wpływ rozmiaru datasetu** (10%, 25%, 50%, 100% danych)
 2. **Porównanie architektur** (ViT vs różne CNN)
-3. **Transfer learning** (pretrenowane vs from scratch)
-4. **Fine-tuning strategies** (zamrożone vs odmarożone warstwy)
 
 ## 📈 Wyniki
 
@@ -150,23 +108,6 @@ results/
 - `f1_weighted` - F1-score ważony
 - `classification_report` - Szczegółowy raport dla każdej klasy
 - `confusion_matrix` - Macierz pomyłek
-
-## 🔬 Analiza rezultatów
-
-Po uruchomieniu eksperymentów możesz analizować:
-
-```python
-import json
-
-# Załaduj wyniki
-with open('results/comparison_summary_TIMESTAMP.json', 'r') as f:
-    results = json.load(f)
-
-# Znajdź najlepszy model
-best_model = max(results, key=lambda x: x['test_accuracy'])
-print(f"Najlepszy model: {best_model['model_type']} - {best_model['model_name']}")
-print(f"Dokładność: {best_model['test_accuracy']:.4f}")
-```
 
 ## 🐳 Docker - Szczegóły
 
