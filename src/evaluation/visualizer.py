@@ -149,10 +149,23 @@ class ResultVisualizer:
             img = images[i]
             heatmap = maps[i]
             
-            overlaid_img = overlay_heatmap(heatmap, img, alpha=0.6)
-            
-            axes[i].imshow(overlaid_img)
-            axes[i].set_title(f"Przykład {i+1}")
+            # Sprawdź czy mapa nie jest pusta
+            if np.sum(np.abs(heatmap)) < 1e-8:
+                # Jeśli mapa jest pusta, pokaż tylko oryginalny obraz
+                if img.shape[0] == 3:
+                    img_display = np.transpose(img, (1, 2, 0))
+                else:
+                    img_display = img
+                img_display = np.clip(img_display, 0, 1)
+                
+                axes[i].imshow(img_display)
+                axes[i].set_title(f"Przykład {i+1}\n(brak mapy)", color='red')
+            else:
+                # Normalna mapa interpretabilności
+                overlaid_img = overlay_heatmap(heatmap, img, alpha=0.6)
+                axes[i].imshow(overlaid_img)
+                axes[i].set_title(f"Przykład {i+1}")
+                
             axes[i].axis('off')
 
         for j in range(num_samples, len(axes)):
@@ -160,7 +173,7 @@ class ResultVisualizer:
 
         plt.tight_layout()
         save_path = os.path.join(self.results_dir, 'interpretability_maps.png')
-        plt.savefig(save_path)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close()
         print(f"✅ Mapy interpretabilności zapisane w: {save_path}")
 

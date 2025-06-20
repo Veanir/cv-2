@@ -27,7 +27,37 @@ class ModelEvaluator:
         self.model = model.to(device)
         self.device = device
         self.class_names = class_names
-        self.model_type = 'vit' if 'vit' in model.__class__.__name__.lower() else 'cnn'
+        
+        # Lepsze wykrywanie typu modelu
+        self.model_type = self._detect_model_type()
+        print(f"🔍 Wykryto typ modelu: {self.model_type}")
+        
+    def _detect_model_type(self) -> str:
+        """Wykrywa typ modelu na podstawie jego struktury"""
+        model_class = self.model.__class__.__name__.lower()
+        
+        # Sprawdź ViT modele
+        if 'vit' in model_class or 'transformer' in model_class:
+            return 'vit'
+        elif hasattr(self.model, 'vit') and hasattr(self.model.vit, 'embeddings'):
+            return 'vit'
+        elif hasattr(self.model, 'get_attention_maps'):
+            return 'vit'
+        
+        # Sprawdź ensemble modele
+        elif 'ensemble' in model_class:
+            # Sprawdź czy to ViT czy CNN ensemble na podstawie pierwszego modelu
+            if hasattr(self.model, 'models') and len(self.model.models) > 0:
+                first_model = self.model.models[0]
+                if hasattr(first_model, 'vit') or 'vit' in first_model.__class__.__name__.lower():
+                    return 'vit'
+                else:
+                    return 'cnn'
+            return 'cnn'  # domyślnie CNN ensemble
+        
+        # Wszystko inne to CNN (včetně AttentionCNN)
+        else:
+            return 'cnn'
         
     def evaluate(self, test_loader: DataLoader) -> Dict[str, Any]:
         """
@@ -141,23 +171,49 @@ class ModelEvaluator:
     def _generate_interpretability_maps(self, images_tensor: torch.Tensor, labels_tensor: torch.Tensor) -> List[np.ndarray]:
         """Generuje mapy Grad-CAM lub atencji dla próbek."""
         maps = []
+        print(f"🎨 Generuję mapy interpretabilności dla {len(images_tensor)} próbek (typ: {self.model_type})")
+        
         if self.model_type == 'cnn':
             target_layer = get_cnn_target_layer(self.model)
             if target_layer is None:
+                print("❌ Nie można znaleźć warstwy docelowej dla Grad-CAM")
                 return maps
             
-            # Tworzymy instancję GradCAM wewnątrz, aby uniknąć problemów z hookami
-            grad_cam = GradCAM(self.model, target_layer)
+            print(f"✅ Używam warstwy docelowej: {target_layer}")
+            
+            # Tworzymy instancję GradCAM dla każdego przykładu osobno
             for i in range(len(images_tensor)):
-                # GradCAM oczekuje pojedynczego obrazu
-                heatmap = grad_cam(images_tensor[i].unsqueeze(0), class_idx=labels_tensor[i].item())
-                if heatmap is not None:
-                    maps.append(heatmap)
-            grad_cam.remove_hooks() # Jawne usunięcie hooków
+                try:
+                    grad_cam = GradCAM(self.model, target_layer)
+                    heatmap = grad_cam(images_tensor[i].unsqueeze(0), class_idx=labels_tensor[i].item())
+                    
+                    if heatmap is not None:
+                        maps.append(heatmap)
+                        print(f"✅ Mapa {i+1}/{len(images_tensor)} wygenerowana")
+                    else:
+                        # Dodaj pustą mapę jako placeholder
+                        maps.append(np.zeros((14, 14)))
+                        print(f"⚠️ Mapa {i+1}/{len(images_tensor)} pusta - dodaję placeholder")
+                        
+                    grad_cam.remove_hooks()  # Jawne usunięcie hooków po każdym użyciu
+                    
+                except Exception as e:
+                    print(f"❌ Błąd podczas generowania mapy {i+1}: {e}")
+                    maps.append(np.zeros((14, 14)))  # Placeholder
         
         elif self.model_type == 'vit':
             for i in range(len(images_tensor)):
-                attention_map = get_vit_attention_map(self.model, images_tensor[i])
-                if attention_map is not None:
-                    maps.append(attention_map)
+                try:
+                    attention_map = get_vit_attention_map(self.model, images_tensor[i])
+                    if attention_map is not None:
+                        maps.append(attention_map)
+                        print(f"✅ Attention map {i+1}/{len(images_tensor)} wygenerowana")
+                    else:
+                        maps.append(np.zeros((14, 14)))
+                        print(f"⚠️ Attention map {i+1}/{len(images_tensor)} pusta - dodaję placeholder")
+                except Exception as e:
+                    print(f"❌ Błąd podczas generowania attention map {i+1}: {e}")
+                    maps.append(np.zeros((14, 14)))  # Placeholder
+        
+        print(f"✅ Wygenerowano {len(maps)} map interpretabilności")
         return maps 

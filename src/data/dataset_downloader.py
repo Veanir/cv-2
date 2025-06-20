@@ -186,28 +186,7 @@ class HAM10000Downloader:
         
         # Jeśli nie udało się - BŁĄD!
         if not success:
-            error_msg = """
-❌ BŁĄD: Nie udało się pobrać datasetu HAM10000 z Kaggle!
-
-🔧 Rozwiązanie:
-
-1. KAGGLE API (.env):
-   - Utwórz plik .env w głównym katalogu projektu
-   - Dodaj do pliku .env:
-     KAGGLE_USERNAME=twoj_username
-     KAGGLE_KEY=twoj_api_key
-   
-2. UZYSKAJ KLUCZE KAGGLE:
-   - Utwórz konto na https://www.kaggle.com
-   - Idź do Account → API → Create New API Token
-   - Pobierz plik kaggle.json
-   - Skopiuj username i key z tego pliku do .env
-
-3. DATASET: https://www.kaggle.com/datasets/kmader/skin-cancer-mnist-ham10000
-
-⚠️  UWAGA: Ten projekt używa TYLKO Kaggle API!
-    Nie ma backup'ów ani alternatywnych źródeł danych.
-""".format(data_dir=self.data_dir)
+            error_msg = """❌ BŁĄD: Nie udało się pobrać datasetu HAM10000 z Kaggle!""".format(data_dir=self.data_dir)
             
             raise HAM10000DatasetError(error_msg)
             
@@ -216,24 +195,6 @@ class HAM10000Downloader:
             raise HAM10000DatasetError("Dataset pobrany, ale weryfikacja nie powiodła się!")
             
         return True
-
-    def show_setup_instructions(self):
-        """Pokazuje instrukcje konfiguracji"""
-        print("🔧 Konfiguracja Kaggle API:")
-        print()
-        print("1. Utwórz konto na https://www.kaggle.com")
-        print("2. Idź do Account → API → Create New API Token")
-        print("3. Pobierz plik kaggle.json")
-        print("4. Utwórz plik .env w głównym katalogu projektu")
-        print("5. Dodaj do .env:")
-        print("   KAGGLE_USERNAME=twoj_username")
-        print("   KAGGLE_KEY=twoj_api_key")
-        print()
-        print("Przykład .env:")
-        print("KAGGLE_USERNAME=jankowalski")
-        print("KAGGLE_KEY=abc123def456...")
-        print()
-
 
 def download_ham10000(data_dir: str = "data") -> bool:
     """Funkcja pomocnicza do pobierania HAM10000 - TYLKO Kaggle API"""
@@ -253,7 +214,6 @@ if __name__ == "__main__":
     
     # Pokaż instrukcje konfiguracji
     downloader = HAM10000Downloader("data")
-    downloader.show_setup_instructions()
     
     try:
         success = download_ham10000(data_dir="data")

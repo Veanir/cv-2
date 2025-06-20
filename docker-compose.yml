@@ -1,16 +1,13 @@
 services:
-  # Główny serwis dla treningu i eksperymentów
   vit-cnn-research:
     build: .
     container_name: vit_cnn_medical
     shm_size: '2gb'
     volumes:
-      # Montuj dane i wyniki, żeby persistowały
       - ./data:/app/data
       - ./results:/app/results
       - ./logs:/app/logs
       - ./checkpoints:/app/checkpoints
-      # Montuj kod, aby zawsze używać najnowszej wersji
       - ./src:/app/src
       - ./scripts:/app/scripts
       - ./config.py:/app/config.py
@@ -24,11 +21,10 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 4
+              count: 1
               capabilities: [gpu]
     command: python test_setup.py
     
-  # Serwis do przygotowania danych (uruchom raz)
   prepare-data:
     build: .
     container_name: vit_cnn_prepare_data
@@ -44,7 +40,6 @@ services:
       - KAGGLE_KEY=${KAGGLE_KEY}
     command: python scripts/prepare_dataset.py
 
-  # Serwis do uruchamiania testów
   test:
     build: .
     container_name: vit_cnn_test
@@ -65,10 +60,9 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 4
+              count: 1
               capabilities: [gpu]
     
-  # Serwis do uruchamiania pojedynczych eksperymentów
   experiment:
     build: .
     shm_size: '2gb'
@@ -77,7 +71,6 @@ services:
       - ./results:/app/results
       - ./logs:/app/logs
       - ./checkpoints:/app/checkpoints
-      # Montuj kod, aby zawsze używać najnowszej wersji
       - ./src:/app/src
       - ./scripts:/app/scripts
       - ./config.py:/app/config.py
@@ -90,12 +83,10 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 4
+              count: 1
               capabilities: [gpu]
-    # Domyślnie uruchamia mały eksperyment testowy
     command: python main.py --mode single --model_type cnn --model_name resnet18 --fraction 0.1
     
-  # Serwis do pełnego porównania (długie uruchamianie!)
   comparison:
     build: .
     container_name: vit_cnn_comparison
@@ -105,7 +96,6 @@ services:
       - ./results:/app/results
       - ./logs:/app/logs
       - ./checkpoints:/app/checkpoints
-      # Montuj kod, aby zawsze używać najnowszej wersji
       - ./src:/app/src
       - ./scripts:/app/scripts
       - ./config.py:/app/config.py
@@ -118,11 +108,10 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 4
+              count: 1
               capabilities: [gpu]
     command: python main.py --mode comparison
 
-# Sieci (opcjonalne dla przyszłych rozszerzeń)
 networks:
   default:
     name: vit_cnn_network 

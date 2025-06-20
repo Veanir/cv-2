@@ -64,7 +64,6 @@ class MedicalCNN(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass"""
         features = self.backbone(x)
-        # 'features' jest już spłaszczonym tensorem cech [B, num_features]
         output = self.classifier(features)
         return output
         
@@ -117,14 +116,16 @@ class AttentionCNN(nn.Module):
                  pretrained: bool = True):
         super().__init__()
         
-        # Base CNN
-        self.backbone = MedicalCNN(base_model, num_classes, pretrained, freeze_backbone=False)
+        # Utwórz model bazowy z timm do ekstraktowania cech (bez klasyfikatora)
+        self.backbone = timm.create_model(
+            base_model, 
+            pretrained=pretrained, 
+            num_classes=0,  
+            features_only=False
+        )
         
-        # Usuń klasyfikator - zastąpimy go attention
-        if base_model.startswith('resnet'):
-            feature_dim = self.backbone.backbone.fc.in_features
-        else:
-            feature_dim = 2048  # Domyślnie
+        # Pobierz wymiar cech - to będzie liczba kanałów w ostatniej warstwie conv
+        feature_dim = self.backbone.num_features
             
         # Spatial Attention
         self.spatial_attention = nn.Sequential(
@@ -151,8 +152,8 @@ class AttentionCNN(nn.Module):
         )
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Uzyskaj cechy z backbone (bez klasyfikacji)
-        features = self.backbone.backbone(x)
+        # Uzyskaj mapy cech 2D z backbone (używamy forward_features)
+        features = self.backbone.forward_features(x)
         
         # Zastosuj attention
         spatial_att = self.spatial_attention(features)

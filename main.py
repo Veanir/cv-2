@@ -142,6 +142,49 @@ def create_model(model_type: str, model_name: str, fine_tune: bool) -> torch.nn.
             'dropout_rate': model_config.dropout_rate
         }
         model = create_cnn_model(model_config_dict)
+    elif model_type == 'attention':
+        # AttentionCNN - vlastna architektura z mechanizmem attention
+        model_config_dict = {
+            'type': 'attention',
+            'cnn_model_name': model_name,
+            'num_classes': model_config.num_classes,
+            'cnn_pretrained': model_config.cnn_pretrained,
+            'freeze_backbone': freeze,
+            'dropout_rate': model_config.dropout_rate
+        }
+        model = create_cnn_model(model_config_dict)
+    elif model_type == 'vit_ensemble':
+        # Ensemble różnych rozmiarów ViT
+        if model_name == 'base_large':
+            ensemble_models = ["google/vit-base-patch16-224", "google/vit-large-patch16-224"]
+        else:
+            ensemble_models = ["google/vit-base-patch16-224"]  # fallback
+        
+        model_config_dict = {
+            'type': 'ensemble',
+            'model_names': ensemble_models,
+            'num_classes': model_config.num_classes,
+            'vit_pretrained': model_config.vit_pretrained,
+            'dropout_rate': model_config.dropout_rate
+        }
+        model = create_vit_model(model_config_dict)
+    elif model_type == 'cnn_ensemble':
+        # Ensemble różnych architektur CNN
+        if model_name == 'resnet_efficientnet_densenet':
+            ensemble_models = ["resnet50", "efficientnet_b0", "densenet121"]
+        elif model_name == 'resnet_efficientnet':
+            ensemble_models = ["resnet50", "efficientnet_b0"]
+        else:
+            ensemble_models = ["resnet50", "efficientnet_b0"]  # fallback
+            
+        model_config_dict = {
+            'type': 'ensemble',
+            'model_names': ensemble_models,
+            'num_classes': model_config.num_classes,
+            'cnn_pretrained': model_config.cnn_pretrained,
+            'dropout_rate': model_config.dropout_rate
+        }
+        model = create_cnn_model(model_config_dict)
     else:
         raise ValueError(f"Nieznany typ modelu: {model_type}")
         
@@ -261,7 +304,6 @@ def run_single_experiment(model_type: str,
             }
             json.dump(config_to_save, f, indent=2)
         
-        # Zapisz "surowe" wyniki do dedykowanych plików
         # Macierz pomyłek
         cm_path = os.path.join(results_dir, 'confusion_matrix.json')
         with open(cm_path, 'w') as f:
@@ -278,7 +320,6 @@ def run_single_experiment(model_type: str,
             pred_details_path = os.path.join(results_dir, 'predictions_details.csv')
             pred_details_df.to_csv(pred_details_path, index=False)
         
-        # Zapisz główne wyniki do JSON (bez dużych obiektów)
         results_to_save = {
             'history': history,
             'test_results': {
@@ -297,7 +338,6 @@ def run_single_experiment(model_type: str,
         vis_samples = test_results.pop('visualization_samples', None)
 
         with open(os.path.join(results_dir, 'results.json'), 'w') as f:
-            # Tworzymy kopię wyników, aby uniknąć modyfikacji oryginału
             results_copy = test_results.copy()
             results_copy.pop('confusion_matrix', None)
             results_copy.pop('predictions', None)
@@ -318,17 +358,14 @@ def run_single_experiment(model_type: str,
         print(f"Test Accuracy: {test_results['accuracy']:.4f}")
         print(f"Test F1: {test_results['f1_weighted']:.4f}")
         
-        # Logowanie artefaktów do WandB na koniec
         if experiment_config.log_wandb and wandb.run is not None:
             print("\n🧹 Logowanie artefaktów do WandB...")
 
-            # Loguj wszystkie obrazy z folderu wyników
             for file_name in os.listdir(results_dir):
                 if file_name.endswith(('.png', '.jpg', '.jpeg')):
                     path = os.path.join(results_dir, file_name)
                     wandb.log({f"media/{os.path.splitext(file_name)[0]}": wandb.Image(path)})
 
-            # Loguj raport klasyfikacji jako tabelę
             report_path = os.path.join(results_dir, 'classification_report.csv')
             if os.path.exists(report_path):
                 try:
@@ -337,7 +374,6 @@ def run_single_experiment(model_type: str,
                 except Exception as e:
                     print(f"⚠️ Nie udało się zalogować raportu klasyfikacji: {e}")
 
-            # Zaktualizuj podsumowanie w WandB
             wandb.run.summary["test_accuracy"] = test_results['accuracy']
             wandb.run.summary["test_f1_weighted"] = test_results['f1_weighted']
             wandb.run.summary["total_params"] = total_params
@@ -405,6 +441,11 @@ def run_comparison_study():
         # CNNs
         ('cnn', 'resnet50'),
         ('cnn', 'efficientnet_b0'),
+        # Własne architektury
+        ('attention', 'resnet50'),  # AttentionCNN z backbone ResNet50
+        # Ensemble models
+        ('vit_ensemble', 'base_large'),  # ViT Base + Large ensemble
+        ('cnn_ensemble', 'resnet_efficientnet'),  # ResNet + EfficientNet ensemble
     ]
     
     # Frakcje datasetu do testowania
@@ -467,7 +508,7 @@ def main():
     parser = argparse.ArgumentParser(description='Vision Transformer vs CNN - Klasyfikacja medyczna')
     parser.add_argument('--mode', choices=['single', 'comparison'], default='comparison',
                        help='Tryb uruchomienia')
-    parser.add_argument('--model_type', choices=['vit', 'cnn'], 
+    parser.add_argument('--model_type', choices=['vit', 'cnn', 'attention', 'vit_ensemble', 'cnn_ensemble'], 
                        help='Typ modelu (dla trybu single)')
     parser.add_argument('--model_name', type=str,
                        help='Nazwa modelu (dla trybu single)')
