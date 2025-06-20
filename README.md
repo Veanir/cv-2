@@ -8,8 +8,6 @@ Projekt badawczy porównujący efektywność Vision Transformers i Convolutional
 
 ## 🚀 Szybki start
 
-### Opcja 1: Docker (zalecana) 🐳
-
 ```bash
 # 1. Zbuduj obraz Docker
 docker-compose build
@@ -50,13 +48,6 @@ project/
 ```
 
 ## 🔧 Konfiguracja
-
-### Kaggle API (wymagane dla datasetu)
-
-1. **Utwórz konto na** https://www.kaggle.com
-2. **Uzyskaj klucze API**: Account → API → Create New API Token
-3. **Utwórz plik `.env`** w głównym katalogu projektu:
-
 ```bash
 # .env
 KAGGLE_USERNAME=twoj_username
