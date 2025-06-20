@@ -15,15 +15,12 @@ from typing import Dict, Tuple
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 
-# Wczytaj zmienne środowiskowe z pliku .env
 load_dotenv()
 
-# Import konfiguracji
 from config import (
     data_config, model_config, training_config, experiment_config
 )
 
-# Import modułów
 from src.data.dataset import create_dataloaders
 from src.models.vision_transformer import create_vit_model
 from src.models.cnn_models import create_cnn_model
@@ -99,12 +96,10 @@ def load_data(dataset_fraction: float) -> Tuple:
 def get_dataset_stats(loader: DataLoader) -> Dict:
     """Analizuje DataLoader i zwraca statystyki dotyczące dystrybucji klas."""
     
-    # Upewnij się, że mamy dostęp do pełnego datasetu, a nie Subset
     dataset = loader.dataset
     if isinstance(dataset, torch.utils.data.Subset):
         dataset = dataset.dataset
         
-    # Użyj wewnętrznej ramki danych do analizy
     df = dataset.data[dataset.data['split'] == dataset.split]
     
     class_counts = df['dx'].value_counts()
@@ -121,7 +116,6 @@ def create_model(model_type: str, model_name: str, fine_tune: bool) -> torch.nn.
     """Tworzy i konfiguruje model."""
     print(f"\nTworzenie modelu {model_type.upper()}...")
     
-    # Wspólna konfiguracja modelu
     freeze = model_config.freeze_backbone and not fine_tune
     
     if model_type == 'vit':
@@ -143,7 +137,6 @@ def create_model(model_type: str, model_name: str, fine_tune: bool) -> torch.nn.
         }
         model = create_cnn_model(model_config_dict)
     elif model_type == 'attention':
-        # AttentionCNN - vlastna architektura z mechanizmem attention
         model_config_dict = {
             'type': 'attention',
             'cnn_model_name': model_name,
@@ -154,7 +147,6 @@ def create_model(model_type: str, model_name: str, fine_tune: bool) -> torch.nn.
         }
         model = create_cnn_model(model_config_dict)
     elif model_type == 'vit_ensemble':
-        # Ensemble różnych rozmiarów ViT
         if model_name == 'base_large':
             ensemble_models = ["google/vit-base-patch16-224", "google/vit-large-patch16-224"]
         else:
@@ -169,7 +161,6 @@ def create_model(model_type: str, model_name: str, fine_tune: bool) -> torch.nn.
         }
         model = create_vit_model(model_config_dict)
     elif model_type == 'cnn_ensemble':
-        # Ensemble różnych architektur CNN
         if model_name == 'resnet_efficientnet_densenet':
             ensemble_models = ["resnet50", "efficientnet_b0", "densenet121"]
         elif model_name == 'resnet_efficientnet':
@@ -200,7 +191,6 @@ def run_single_experiment(model_type: str,
     exp_config = setup_experiment(model_type, model_name, dataset_fraction, fine_tune)
     device = get_device()
     
-    # Inicjalizacja WandB dla tego konkretnego eksperymentu
     if experiment_config.log_wandb:
         wandb.init(
             project=experiment_config.experiment_name,
@@ -385,7 +375,6 @@ def run_single_experiment(model_type: str,
         return results_to_save
 
     finally:
-        # Zawsze zamykaj run WandB
         if experiment_config.log_wandb and wandb.run is not None:
             wandb.finish()
             print("🧹 Run WandB zakończony.")
@@ -394,7 +383,6 @@ def limit_dataloader(dataloader: DataLoader, fraction: float) -> DataLoader:
     """Ogranicza rozmiar DataLoader'a, zachowując dystrybucję klas (stratyfikacja)."""
     dataset = dataloader.dataset
 
-    # Sprawdzamy, czy `dataset` to nasz HAM10000Dataset. Jeśli nie, stosujemy losowe próbkowanie.
     if not hasattr(dataset, 'data') or 'dx' not in dataset.data.columns:
         print("⚠️ Ostrzeżenie: Dataset nie jest typu HAM10000Dataset. Stosuję losowe próbkowanie zamiast stratyfikacji.")
         total_size = len(dataset)
@@ -408,8 +396,6 @@ def limit_dataloader(dataloader: DataLoader, fraction: float) -> DataLoader:
         labels = dataset.data['dx']
         indices = list(range(len(dataset)))
 
-        # Używamy train_test_split do uzyskania stratyfikowanego podzbioru indeksów.
-        # Ignorujemy drugi zwracany element (reszta danych).
         limited_indices, _ = train_test_split(
             indices,
             train_size=fraction,
