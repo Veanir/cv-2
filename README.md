@@ -21,23 +21,6 @@ docker-compose run --rm test
 docker-compose run --rm experiment
 ```
 
-**Lub użyj interaktywnych skryptów:**
-- **Linux/Mac**: `bash scripts/docker_run.sh`
-- **Windows**: `scripts\docker_run.bat`
-
-### Opcja 2: Instalacja lokalna
-
-```bash
-# 1. Instalacja zależności
-pip install -r requirements.txt
-
-# 2. Test konfiguracji
-python test_setup.py
-
-# 3. Pierwszy eksperyment
-python main.py --mode single --model_type cnn --model_name resnet18 --fraction 0.1
-```
-
 ## 📁 Struktura projektu
 
 ```
@@ -78,15 +61,8 @@ project_2/
 # .env
 KAGGLE_USERNAME=twoj_username
 KAGGLE_KEY=twój_klucz_api_z_kaggle.json
+WANDB_API_KEY=twoj_klucz_api_wandb
 ```
-
-**Przykład:**
-```bash
-KAGGLE_USERNAME=jankowalski
-KAGGLE_KEY=abc123def456ghi789jkl012...
-```
-
-⚠️ **UWAGA**: Plik `.env` jest już w `.gitignore` - nie zostanie commitowany!
 
 ### Główne ustawienia w `config.py`:
 
@@ -197,18 +173,11 @@ print(f"Dokładność: {best_model['test_accuracy']:.4f}")
 ### Dostępne serwisy
 
 ```bash
-# Testy konfiguracji
-docker-compose run --rm test
-
-# Pojedynczy eksperyment
-docker-compose run --rm experiment 
+# Przygotowanie danych
+docker-compose run --rm prepare-data
 
 # Pełne porównanie
 docker-compose run --rm comparison
-
-# Interaktywny terminal
-docker-compose run --rm -it vit-cnn-research bash
-```
 
 ### GPU Support w Docker
 
@@ -224,8 +193,6 @@ deploy:
           capabilities: [gpu]
 ```
 
-I zainstaluj [nvidia-docker](https://github.com/NVIDIA/nvidia-docker).
-
 ### Volumes
 
 Docker automatycznie mountuje:
@@ -233,38 +200,6 @@ Docker automatycznie mountuje:
 - `./results` → `/app/results` (wyniki)
 - `./logs` → `/app/logs` (logi)
 - `./checkpoints` → `/app/checkpoints` (modele)
-
-## 🐛 Troubleshooting
-
-### Problem: Docker nie buduje się
-```
-ERROR: failed to solve: failed to compute cache key
-```
-**Rozwiązanie**: `docker system prune -a` i spróbuj ponownie.
-
-### Problem: Brak CUDA
-```
-⚠️ CUDA niedostępna - używam CPU
-```
-**Rozwiązanie**: To normalne. Dla testów CPU wystarczy. Dla GPU zobacz sekcję "GPU Support".
-
-### Problem: Błąd internetu przy ViT
-```
-⚠️ ViT niedostępny (prawdopodobnie brak internetu)
-```
-**Rozwiązanie**: ViT wymaga pobrania z HuggingFace. Sprawdź połączenie internetowe.
-
-### Problem: Błąd pamięci
-```
-RuntimeError: CUDA out of memory
-```
-**Rozwiązanie**: Zmniejsz `batch_size` w `config.py` lub użyj `--fraction 0.1`.
-
-### Problem: Kontenery nie usuwają się
-```bash
-docker-compose down
-docker system prune -f
-```
 
 ## 📚 Dataset
 
@@ -274,70 +209,9 @@ Projekt używa HAM10000 - dataset do klasyfikacji zmian skórnych:
 - **Obrazy**: ~10,000 zdjęć dermatologicznych
 - **Format**: JPEG, normalizowane do 224x224
 
-### 🎯 Automatyczne pobieranie z Kaggle (Zalecane!)
-
-Najłatwiejszy sposób to użycie Kaggle API:
-
-```bash
-# 1. Skonfiguruj Kaggle API
-python scripts/setup_kaggle.py
-
-# 2. Dataset zostanie automatycznie pobrany przy pierwszym uruchomieniu
-python src/data/dataset_downloader.py
-```
-
-### Alternatywnie - Pobieranie ręczne
-
-Dla najlepszych wyników pobierz HAM10000 z:
-- [Kaggle](https://www.kaggle.com/datasets/kmader/skin-cancer-mnist-ham10000) ⭐ **Zalecane**
-- [ISIC Archive](https://challenge.isic-archive.com/data/)
-
-Umieść w folderze `data/`:
-```
-data/
-├── HAM10000_metadata.csv
-├── HAM10000_images_part_1/
-└── HAM10000_images_part_2/
-```
-
-### Konfiguracja Kaggle API
-
-1. **Utwórz konto** na [kaggle.com](https://www.kaggle.com)
-2. **Pobierz API token**: Account → API → Create New API Token
-3. **Skonfiguruj**: Uruchom `python scripts/setup_kaggle.py`
-
-Lub ręcznie:
-```bash
-mkdir -p ~/.kaggle
-cp kaggle.json ~/.kaggle/
-chmod 600 ~/.kaggle/kaggle.json
-```
-
 ## 🎓 Cele badawcze
 
 1. **Porównanie dokładności** ViT vs CNN
 2. **Analiza wpływu rozmiaru datasetu** na performance
-3. **Badanie transfer learning** i fine-tuning strategies
-4. **Interpretabilność** - attention maps vs feature maps
-5. **Efektywność obliczeniowa** - czas treningu, liczba parametrów
-
-## 📝 Raportowanie
-
-Projekt generuje wszystkie dane potrzebne do raportu:
-
-- **Accuracy metrics** dla różnych modeli
-- **Confusion matrices** 
-- **Learning curves**
-- **Parameter counts**
-- **Training times**
-
-## 🤝 Kontakt
-
-W przypadku problemów sprawdź:
-1. `test_setup.py` - diagnostyka
-2. Logi w folderze `logs/`
-3. Dokumentację PyTorch/Transformers
-
----
-
-**Powodzenia w badaniach! 🔬🎯** 
+3. **Interpretabilność** - attention maps vs feature maps
+4. **Efektywność obliczeniowa** - czas treningu, liczba parametrów
